@@ -8,7 +8,6 @@ from bear_to_notion.model.markdown import Markdown
 from md2notion.upload import upload
 
 from pathlib import Path
-import json
 import sys
 
 class NotionUploader(Model):
@@ -21,19 +20,16 @@ class NotionUploader(Model):
         assert isinstance(self._root_page, PageBlock)
         self._disallowed_tags = disallowed_tags
         self._dry_run = dry_run
-        self._page_by_tag = {}
-        self._collection_view_by_tag = {}
 
     def upload(self, markdown_files):
         filtered_markdown_files = self.__filter_markdown_files(markdown_files)
         self.__print(f"The number of all markdown files is {len(markdown_files)}.")
         self.__print(f"The number of filtered markdown files (to be uploaded to notion) is {len(filtered_markdown_files)}.")
 
-
-        self.__create_tag_pages(filtered_markdown_files)
+        collection_view = self.__create_list_collection(self._root_page)
 
         for markdown in filtered_markdown_files:
-            self.__upload_markdown(markdown)
+            self.__upload_markdown(markdown, collection_view)
 
     def __filter_markdown_files(self, markdown_files):
         return list(filter(self.__filter_markdown, markdown_files))
@@ -44,7 +40,7 @@ class NotionUploader(Model):
                 return False
         return True
 
-    def __upload_markdown(self, markdown: Markdown):
+    def __upload_markdown(self, markdown: Markdown, collection_view: CollectionViewBlock):
         self.__print(f"Uploading {markdown.name}(tag: {markdown.tag}) to Notion.so")
         sys.stdout.flush()
         if self._dry_run:
@@ -56,35 +52,12 @@ class NotionUploader(Model):
             #md_file.__dict__["name"] = markdown.path
             #upload(md_file, new_page, imagePathFunc=convert_image_path, notionPyRendererCls=addHtmlImgTagExtension(NotionPyRenderer))
 
-            collection_view: CollectionViewBlock = self._collection_view_by_tag[markdown.tag]
             new_row: CollectionRowBlock = collection_view.collection.add_row(title=markdown.name)
             new_row.set_property("created_at", markdown.created_at)
+            new_row.set_property("modified_at", markdown.modified_at)
+            new_row.set_property("Tags", list(map(lambda tag: tag.title(), markdown.tag.split('/'))))
 
             upload(md_file, new_row)
-
-    def __create_tag_pages(self, markdown_files: [Markdown]):
-        tag_dict = {}
-        for markdown in markdown_files:
-            current = tag_dict
-            for tag in markdown.tag.split('/'):
-                if tag not in current:
-                    current[tag] = {}
-                current = current[tag]
-
-        if self._dry_run:
-            self.__print(json.dumps(tag_dict, sort_keys=True, indent=2))
-        else:
-            self.__create_tag_pages_recursively(self._root_page, [], tag_dict)
-        self.__print("Tag pages have been created.")
-
-    def __create_tag_pages_recursively(self, current_page: PageBlock, current_tag_list: [str], current_tag_dict: dict[str]):
-        for tag, child_dict in current_tag_dict.items():
-            current_tag_list.append(tag)
-            next_page: PageBlock = current_page.children.add_new(PageBlock, title=tag)
-            self._page_by_tag['/'.join(current_tag_list)] = next_page
-            self.__create_tag_pages_recursively(next_page, current_tag_list, current_tag_dict[tag])
-            current_tag_list.pop()
-        self._collection_view_by_tag['/'.join(current_tag_list)] = self.__create_list_collection(current_page)
 
     # Create database
     def __create_list_collection(self, parent_page: PageBlock):
@@ -93,17 +66,18 @@ class NotionUploader(Model):
             self._client.create_record("collection", parent=collection_view, schema=self.__get_collection_schema())
         )
         collection_view.views.add_new(view_type="list")
-        collection_view.title = "__notes"
+        collection_view.title = "Notes"
         return collection_view
 
     def __get_collection_schema(self):
         return {
-            "=d{|": {
+            "tags": {
                 "name": "Tags",
                 "type": "multi_select",
                 "options": [],
             },
             "created_at": {"name": "Created at", "type": "date"},
+            "modified_at": {"name": "Modified at", "type": "date"},
             "title": {"name": "Name", "type": "title"},
         }
 
